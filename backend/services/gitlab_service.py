@@ -19,6 +19,20 @@ def get_recent_commits():
     return response.json()
 
 
+def create_branch(branch_name: str):
+
+    url = f"{GITLAB_BASE_URL}/projects/{GITLAB_PROJECT_ID}/repository/branches"
+
+    payload = {
+        "branch": branch_name,
+        "ref": "main"
+    }
+
+    response = requests.post(url, headers=headers, data=payload)
+
+    return response.json()
+
+
 def create_commit(
     branch: str,
     commit_message: str,

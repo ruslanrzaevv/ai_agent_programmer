@@ -1,9 +1,9 @@
 def get_logs():
-    fake_logs = """
+
+    return """
     ERROR:
-    psycopg2 module missing
+    Database connection failed
 
     Traceback:
-    ModuleNotFoundError: psycopg2
+    psycopg2.OperationalError
     """
-    return fake_logs
