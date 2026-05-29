@@ -1,15 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.deps import get_current_user
 from app.db.session import get_db
+from app.models.models import User
 from app.schemas.schemas import (
     GoogleAuthRequest, LoginRequest, RefreshRequest,
     RegisterRequest, TokenResponse, UserOut, VerifyRequest,
 )
 from app.services.auth_service import AuthService
-from app.services.notification_service import NotificationService
-from app.api.v1.deps import get_current_user
-from app.models.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -25,19 +24,54 @@ async def register(
     svc: AuthService = Depends(_auth_svc),
     db: AsyncSession = Depends(get_db),
 ):
+
     try:
         user = await svc.register(req)
         tokens = await svc._issue_tokens(user)  # noqa: SLF001
         await db.commit()
 
-        # Send verification code
         if req.email:
-            code = await svc.send_verification_code(req.email, "register")
-            # TODO: background.add_task(send_email_code, req.email, code)
+            background.add_task(svc.send_verification_code, req.email, "register")
+        elif req.phone:
+            background.add_task(svc.send_verification_code, req.phone, "register")
 
         return tokens
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/send-code")
+async def send_code(
+    target: str,
+    purpose: str = "login",
+    svc: AuthService = Depends(_auth_svc),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Отправить код подтверждения вручную.
+    target — email или номер телефона (+998...)
+    purpose — register | login | reset
+    """
+    try:
+        await svc.send_verification_code(target, purpose)
+        await db.commit()
+        return {"message": f"Код отправлен на {target}"}
+    except Exception as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/verify")
+async def verify(
+    req: VerifyRequest,
+    svc: AuthService = Depends(_auth_svc),
+    db: AsyncSession = Depends(get_db),
+):
+    """Проверить код подтверждения."""
+    ok = await svc.verify_code(req.target, req.code, req.purpose)
+    if not ok:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Неверный или истёкший код")
+    await db.commit()
+    return {"verified": True}
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -80,19 +114,6 @@ async def refresh(
         return tokens
     except ValueError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=str(e))
-
-
-@router.post("/verify")
-async def verify(
-    req: VerifyRequest,
-    svc: AuthService = Depends(_auth_svc),
-    db: AsyncSession = Depends(get_db),
-):
-    ok = await svc.verify_code(req.target, req.code, req.purpose)
-    if not ok:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid or expired code")
-    await db.commit()
-    return {"verified": True}
 
 
 @router.get("/me", response_model=UserOut)

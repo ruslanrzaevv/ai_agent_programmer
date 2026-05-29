@@ -33,7 +33,6 @@ class AuthService:
     # ── Registration ───────────────────────────────────────────────────────────
 
     async def register(self, req: RegisterRequest) -> User:
-        # Check uniqueness
         if req.email:
             existing = await self.db.scalar(select(User).where(User.email == req.email))
             if existing:
@@ -61,6 +60,60 @@ class AuthService:
         logger.info("user_registered", user_id=str(user.id), provider=req.auth_provider)
         return user
 
+    # ── Send verification code ─────────────────────────────────────────────────
+
+    async def send_verification_code(self, target: str, purpose: str) -> str:
+        """
+        Генерирует 6-значный код, сохраняет в БД.
+        Если target — email → отправляет письмо через Gmail.
+        Если target — телефон → логирует (SMS шлюз подключается отдельно).
+        """
+        code = "".join(random.choices(string.digits, k=6))
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+
+        vc = VerificationCode(
+            target=target,
+            code=code,
+            purpose=purpose,
+            expires_at=expires_at,
+        )
+        self.db.add(vc)
+        await self.db.flush()
+
+        # Email — отправляем через Gmail
+        if "@" in target:
+            from app.services.notification_service import send_verification_email
+            await send_verification_email(target, code)
+
+        # Телефон — логируем код (для дебага), SMS шлюз подключишь позже
+        else:
+            logger.info(
+                "verification_code_generated_for_phone",
+                phone=target,
+                code=code,  # в продакшене убери это!
+                purpose=purpose,
+            )
+
+        return code
+
+    async def verify_code(self, target: str, code: str, purpose: str) -> bool:
+        vc = await self.db.scalar(
+            select(VerificationCode).where(
+                VerificationCode.target == target,
+                VerificationCode.code == code,
+                VerificationCode.purpose == purpose,
+                VerificationCode.used == False,  # noqa: E712
+                VerificationCode.expires_at > datetime.now(timezone.utc),
+            )
+        )
+        if not vc:
+            return False
+        vc.used = True
+        user = await self._find_user(target)
+        if user:
+            user.is_verified = True
+        return True
+
     # ── Login ──────────────────────────────────────────────────────────────────
 
     async def login(self, identifier: str, password: str) -> TokenResponse:
@@ -71,7 +124,6 @@ class AuthService:
             raise ValueError("Invalid credentials")
         if not user.is_active:
             raise ValueError("Account is disabled")
-
         return await self._issue_tokens(user)
 
     # ── Google OAuth ───────────────────────────────────────────────────────────
@@ -81,10 +133,8 @@ class AuthService:
         google_id = profile["sub"]
 
         user = await self.db.scalar(select(User).where(User.google_id == google_id))
-        if not user:
-            # Try to find by email
-            if profile.get("email"):
-                user = await self.db.scalar(select(User).where(User.email == profile["email"]))
+        if not user and profile.get("email"):
+            user = await self.db.scalar(select(User).where(User.email == profile["email"]))
 
         if not user:
             user = User(
@@ -125,49 +175,12 @@ class AuthService:
         if not user or not user.is_active:
             raise ValueError("User not found or inactive")
 
-        # Rotate
         rt.revoked = True
         return await self._issue_tokens(user)
-
-    # ── Verification codes ─────────────────────────────────────────────────────
-
-    async def send_verification_code(self, target: str, purpose: str) -> str:
-        code = "".join(random.choices(string.digits, k=6))
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-
-        vc = VerificationCode(
-            target=target,
-            code=code,
-            purpose=purpose,
-            expires_at=expires_at,
-        )
-        self.db.add(vc)
-        await self.db.flush()
-        return code
-
-    async def verify_code(self, target: str, code: str, purpose: str) -> bool:
-        vc = await self.db.scalar(
-            select(VerificationCode).where(
-                VerificationCode.target == target,
-                VerificationCode.code == code,
-                VerificationCode.purpose == purpose,
-                VerificationCode.used == False,  # noqa: E712
-                VerificationCode.expires_at > datetime.now(timezone.utc),
-            )
-        )
-        if not vc:
-            return False
-        vc.used = True
-        # Mark user as verified
-        user = await self._find_user(target)
-        if user:
-            user.is_verified = True
-        return True
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     async def _find_user(self, identifier: str) -> User | None:
-        # Try email, then phone, then username
         for field in [User.email, User.phone, User.username]:
             user = await self.db.scalar(select(User).where(field == identifier))
             if user:
@@ -181,13 +194,21 @@ class AuthService:
         rt = RefreshToken(
             user_id=user.id,
             token_hash=_hash_token(refresh),
-            expires_at=datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
+            expires_at=datetime.now(timezone.utc) + timedelta(
+                days=settings.REFRESH_TOKEN_EXPIRE_DAYS
+            ),
         )
         self.db.add(rt)
         user.last_login_at = datetime.now(timezone.utc)
 
-        # Cache user session
-        await cache.set(f"user:{user.id}", {"id": str(user.id), "is_active": user.is_active}, ttl=3600)
+        try:
+            await cache.set(
+                f"user:{user.id}",
+                {"id": str(user.id), "is_active": user.is_active},
+                ttl=3600,
+            )
+        except Exception:
+            pass  # Redis недоступен — продолжаем без кэша
 
         return TokenResponse(access_token=access, refresh_token=refresh)
 

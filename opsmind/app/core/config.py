@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://opsmind:opsmind@localhost:5432/opsmind"
-    DATABASE_URL_SYNC: str = "postgresql://opsmind:opsmind@localhost:5432/opsmind"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:heckfykisrab0(@localhost:5432/postgres"
+    DATABASE_URL_SYNC: str = "postgresql://postgres:heckfykisrab0(@localhost:5432/postgres"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -25,12 +25,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
 
     # Notifications
-    TWILIO_ACCOUNT_SID: str = ""
-    TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_FROM_PHONE: str = ""
-    SENDGRID_API_KEY: str = ""
-    SENDGRID_FROM_EMAIL: str = "alerts@opsmind.io"
-    SENDGRID_FROM_NAME: str = "OpsMind Alerts"
+    GMAIL_USER: str = "rzaevvr9@gmail.com"
+    GMAIL_PASSWORD: str = "xwgi gkoi badn lhzt"  
 
     # OAuth
     GOOGLE_CLIENT_ID: str = ""
