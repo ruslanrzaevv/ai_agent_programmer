@@ -1,9 +1,12 @@
-// src/hooks/useAuth.js
+import { useEffect } from "react";
+import { useAuthStore } from "../store/authStore";
 
-import {
-    useAuth as useAuthContext,
-  } from "../context/AuthContext";
-  
-  export default function useAuth() {
-    return useAuthContext();
-  }
+export function useAuth() {
+  const store = useAuthStore();
+
+  useEffect(() => {
+    if (!store.initialized) store.init();
+  }, []);
+
+  return store;
+}

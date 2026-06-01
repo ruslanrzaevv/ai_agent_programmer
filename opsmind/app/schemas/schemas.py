@@ -260,3 +260,21 @@ class PaginatedResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    
+    
+class SetupWizardRequest(BaseModel):
+    category: str
+    message: str
+
+
+class SetupWizardResponse(BaseModel):
+    answer: str
+    suggested_values: dict = {}
+
+
+class AnalyzeSetupRequest(BaseModel):
+    form_data: dict
+    
+class ExplainRequest(BaseModel):
+    issue: str
+    level: str

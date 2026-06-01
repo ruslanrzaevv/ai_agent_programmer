@@ -7,26 +7,27 @@ class Settings(BaseSettings):
 
     # App
     APP_ENV: str = "development"
-    SECRET_KEY: str = "changeme"
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
-    # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:heckfykisrab0(@localhost:5432/postgres"
-    DATABASE_URL_SYNC: str = "postgresql://postgres:heckfykisrab0(@localhost:5432/postgres"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
-    # AI
-    ANTHROPIC_API_KEY: str = ""
+    # GEMINI 
+    GEMINI_API_KEY: str = ""
+    
+    TELEGRAM_BOT_USERNAME: str = "QRNOpsMindBot"    
 
     # Notifications
-    GMAIL_USER: str = "rzaevvr9@gmail.com"
-    GMAIL_PASSWORD: str = "xwgi gkoi badn lhzt"  
+    GMAIL_USER: str = ""
+    GMAIL_PASSWORD: str = ""  
+    
+    BOT_TOKEN: str = ''
 
     # OAuth
     GOOGLE_CLIENT_ID: str = ""

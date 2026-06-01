@@ -45,6 +45,8 @@ class NotificationService:
         project: Project,
         users: list[User],
     ) -> None:
+        from app.services.telegram_service import notify_incident_telegram
+
         for user in users:
             channels = project.notify_channels or []
             for channel in channels:
@@ -52,6 +54,8 @@ class NotificationService:
                     await self._send_sms(user, incident, project)
                 elif channel == NotificationChannel.EMAIL and user.email:
                     await self._send_email(user, incident, project)
+                elif channel == NotificationChannel.TELEGRAM and user.telegram_chat_id:
+                    await notify_incident_telegram(self.db, user, incident, project)
 
     # ── SMS (лог — подключи Eskiz/другой шлюз позже) ──────────────────────────
 

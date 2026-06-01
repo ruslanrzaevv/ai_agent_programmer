@@ -1,14 +1,10 @@
-"""
-OpsMind database models.
-All tables use UUID primary keys and soft-delete where applicable.
-"""
 import uuid
 from datetime import datetime, timezone
 from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Boolean, DateTime, Enum, Float, ForeignKey,
-    Integer, String, Text, UniqueConstraint, JSON,
+    Integer, String, Text, UniqueConstraint, JSON, BigInteger,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -24,11 +20,7 @@ def new_uuid() -> uuid.UUID:
     return uuid.uuid4()
 
 
-# ─── Хелпер — передаёт lowercase значения в PostgreSQL ───────────────────────
-
 def pg_enum(enum_cls, **kwargs):
-    """SQLAlchemy по умолчанию передаёт имя члена enum (EMAIL, SENIOR),
-    а не его значение (email, senior). Этот хелпер исправляет это."""
     return Enum(
         enum_cls,
         values_callable=lambda x: [e.value for e in x],
@@ -70,6 +62,7 @@ class NotificationChannel(str, PyEnum):
     SMS = "sms"
     EMAIL = "email"
     PUSH = "push"
+    TELEGRAM = "telegram"
 
 
 class LogLevel(str, PyEnum):
@@ -105,6 +98,12 @@ class User(Base):
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     explain_mode: Mapped[ExplainMode] = mapped_column(pg_enum(ExplainMode), default=ExplainMode.SENIOR)
     notify_channels: Mapped[list] = mapped_column(JSON, default=list)
+
+    # ── Telegram ──────────────────────────────────────────────────────────────
+    telegram_chat_id: Mapped[int | None] = mapped_column(BigInteger, unique=True, nullable=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    telegram_link_token: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -149,7 +148,6 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     environment: Mapped[str] = mapped_column(String(32), default="production")
 
-    # Docker
     docker_engine_url: Mapped[str] = mapped_column(String(500))
     docker_tls_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     docker_tls_cert: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -157,20 +155,17 @@ class Project(Base):
     docker_tls_ca: Mapped[str | None] = mapped_column(Text, nullable=True)
     docker_container_filter: Mapped[dict] = mapped_column(JSONB, default=dict)
 
-    # GitLab
     gitlab_url: Mapped[str] = mapped_column(String(500), default="https://gitlab.com")
     gitlab_token: Mapped[str] = mapped_column(String(255))
     gitlab_project_id: Mapped[str] = mapped_column(String(64))
     gitlab_webhook_secret: Mapped[str | None] = mapped_column(String(128), nullable=True)
     gitlab_branches: Mapped[list] = mapped_column(JSON, default=lambda: ["main", "master"])
 
-    # Alerting
     error_threshold_per_minute: Mapped[int] = mapped_column(Integer, default=5)
     log_level_filter: Mapped[list] = mapped_column(JSON, default=lambda: ["error", "critical"])
-    notify_channels: Mapped[list] = mapped_column(JSON, default=lambda: ["email", "sms"])
+    notify_channels: Mapped[list] = mapped_column(JSON, default=lambda: ["email", "telegram"])
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
 
-    # State
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
@@ -212,7 +207,6 @@ class Incident(Base):
     severity: Mapped[IncidentSeverity] = mapped_column(pg_enum(IncidentSeverity), index=True)
     status: Mapped[IncidentStatus] = mapped_column(pg_enum(IncidentStatus), default=IncidentStatus.OPEN, index=True)
 
-    # AI analysis
     ai_explanation_junior: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_explanation_senior: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_explanation_ceo: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -221,9 +215,7 @@ class Incident(Base):
     ai_fix_applied: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_fix_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Timeline for Incident Replay
     timeline: Mapped[list] = mapped_column(JSONB, default=list)
-
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     affected_containers: Mapped[list] = mapped_column(JSON, default=list)
     estimated_revenue_loss: Mapped[float | None] = mapped_column(Float, nullable=True)

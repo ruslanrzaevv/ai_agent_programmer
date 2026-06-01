@@ -1,5 +1,4 @@
 import uuid
-
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,7 +11,7 @@ from app.workers.monitoring_manager import monitoring_manager
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
-
+    
 @router.get("/", response_model=list[ProjectOut])
 async def list_projects(
     current_user: User = Depends(get_current_user),
@@ -60,7 +59,6 @@ async def update_project(
     await db.commit()
     await db.refresh(project)
 
-    # Restart monitoring with new config
     await monitoring_manager.restart_project(str(project.id))
 
     return project
