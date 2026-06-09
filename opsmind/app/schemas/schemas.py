@@ -171,22 +171,31 @@ class IncidentOut(BaseModel):
     title: str
     severity: IncidentSeverity
     status: IncidentStatus
+
     ai_explanation_junior: str | None
     ai_explanation_senior: str | None
     ai_explanation_ceo: str | None
+
     ai_fix_suggestion: str | None
     ai_auto_fix_script: str | None
+
+    ai_fix_file: str | None = None
+    ai_fix_old_code: str | None = None
+    ai_fix_new_code: str | None = None
+
     ai_fix_applied: bool
+
     timeline: list[dict[str, Any]]
     error_count: int
     affected_containers: list[str]
+
     estimated_revenue_loss: float | None
+
     started_at: datetime
     resolved_at: datetime | None
     acknowledged_at: datetime | None
     created_at: datetime
     updated_at: datetime
-
 
 class IncidentAcknowledge(BaseModel):
     pass
@@ -275,6 +284,3 @@ class SetupWizardResponse(BaseModel):
 class AnalyzeSetupRequest(BaseModel):
     form_data: dict
     
-class ExplainRequest(BaseModel):
-    issue: str
-    level: str

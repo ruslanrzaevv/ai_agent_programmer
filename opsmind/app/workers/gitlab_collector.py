@@ -1,7 +1,3 @@
-"""
-GitLab event collector.
-Handles incoming webhook events AND polls GitLab API for pipeline status.
-"""
 from __future__ import annotations
 
 import asyncio

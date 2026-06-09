@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from google.genai.errors import ServerError
 
 from app.api.v1.deps import get_current_user, get_project_for_user
 from app.db.session import get_db
@@ -15,7 +16,7 @@ from app.schemas.schemas import (
 )
 from app.services.ai_service import AIService
 from app.services.incident_service import IncidentService
-
+from app.services.autofix_service import AutoFixService
 router = APIRouter(prefix="/incidents", tags=["incidents"])
 
 
@@ -35,19 +36,31 @@ async def list_incidents(
     _project: Project = Depends(get_project_for_user),
     db: AsyncSession = Depends(get_db),
 ):
-    q = select(Incident).where(Incident.project_id == project_id)
+    conditions = [Incident.project_id == project_id]
     if status_filter:
-        q = q.where(Incident.status == status_filter)
+        conditions.append(Incident.status == status_filter)
     if severity:
-        q = q.where(Incident.severity == severity)
-    q = q.order_by(desc(Incident.started_at))
+        conditions.append(Incident.severity == severity)
 
-    total = await db.scalar(q.with_only_columns(Incident.id).order_by(None))
-    incidents = await db.scalars(q.limit(limit).offset(offset))
+    count_q = (
+        select(func.count())
+        .select_from(Incident)
+        .where(*conditions)
+    )
+    total = await db.scalar(count_q)
+    q = (
+        select(Incident)
+        .where(*conditions)
+        .order_by(desc(Incident.started_at))
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await db.scalars(q)
+    incidents = list(result.all())
 
     return PaginatedResponse(
         items=[IncidentOut.model_validate(i) for i in incidents],
-        total=total or 0,
+        total=total,
         limit=limit,
         offset=offset,
     )
@@ -104,10 +117,7 @@ async def get_replay(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Returns the full minute-by-minute timeline for Incident Replay.
-    The frontend uses this to render the video-player-style scrubber.
-    """
+    
     incident = await _get_incident_for_user(incident_id, current_user.id, db)
     return incident.timeline or []
 
@@ -173,15 +183,29 @@ async def apply_fix(
     incident_id: uuid.UUID,
     req: ApplyFixRequest,
     current_user: User = Depends(get_current_user),
-    svc: IncidentService = Depends(_svc),
     db: AsyncSession = Depends(get_db),
 ):
-    await _get_incident_for_user(incident_id, current_user.id, db)
-    result = await svc.apply_fix(incident_id, req.confirmed)
-    if req.confirmed:
-        await db.commit()
-    return result
+    incident = await _get_incident_for_user(
+        incident_id,
+        current_user.id,
+        db,
+    )
 
+    project = await db.get(
+        Project,
+        incident.project_id,
+    )
+
+    autofix = AutoFixService()
+
+    result = await autofix.apply_fix(
+        incident,
+        project,
+    )
+
+    await db.commit()
+
+    return result
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -203,12 +227,58 @@ async def _get_incident_for_user(
 async def _get_incident_logs(
     incident_id: uuid.UUID,
     db: AsyncSession,
-    limit: int = 50,
-) -> list[LogEntry]:
+    limit: int = 200,
+    ) -> list[LogEntry]:
     rows = await db.scalars(
         select(LogEntry)
-        .join(IncidentLog, LogEntry.id == IncidentLog.log_entry_id)
-        .where(IncidentLog.incident_id == incident_id)
+        .join(
+            IncidentLog,
+            LogEntry.id == IncidentLog.log_entry_id,
+        )
+        .where(
+            IncidentLog.incident_id == incident_id
+        )
+        .order_by(LogEntry.timestamp.asc())
         .limit(limit)
     )
     return list(rows)
+
+@router.post(
+    "/{incident_id}/generate-code-fix"
+)
+async def generate_code_fix(
+    incident_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    incident = await _get_incident_for_user(
+        incident_id,
+        current_user.id,
+        db,
+    )
+
+    project = await db.get(
+        Project,
+        incident.project_id,
+    )
+
+    logs = await _get_incident_logs(
+        incident_id,
+        db,
+    )
+
+    logs_text = "\n".join(
+        log.message
+        for log in logs
+    )
+
+    autofix = AutoFixService()
+    
+    result = await autofix.create_fix(
+        incident,
+        project,
+        logs_text,
+    )
+    await db.commit()
+
+    return result

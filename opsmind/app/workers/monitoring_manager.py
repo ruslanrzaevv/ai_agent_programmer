@@ -1,20 +1,17 @@
-"""
-Monitoring Manager.
-Manages lifecycle of all per-project collectors and detectors.
-Started once when the FastAPI app boots.
-"""
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import uuid
 from contextlib import asynccontextmanager
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+
 from app.core.logging import get_logger
 from app.db.session import AsyncSessionLocal
-from app.models.models import Project, User
+from app.models.models import Project, User, LogEntry, LogSource, LogLevel
 from app.workers.docker_collector import DockerLogCollector
 from app.workers.gitlab_collector import GitLabCollector
 from app.workers.incident_detector import IncidentDetector
@@ -29,12 +26,6 @@ async def get_db_ctx():
 
 
 class MonitoringManager:
-    """
-    Singleton that tracks all running collectors/detectors.
-    Call start_project() when a project is created/enabled,
-    stop_project() when disabled/deleted.
-    """
-
     def __init__(self):
         self._docker: dict[str, DockerLogCollector] = {}
         self._gitlab: dict[str, GitLabCollector] = {}
@@ -61,9 +52,14 @@ class MonitoringManager:
             await self.stop_project(project_id)
 
     # ── Per-project management ─────────────────────────────────────────────────
-
     async def start_project(self, project: Project, owner: User) -> None:
+       
         pid = str(project.id)
+        logger.info(
+        "START_PROJECT_CALLED",
+        project_id=pid,
+        project_name=project.name,
+    )
         if pid in self._detectors:
             logger.warning("project_already_monitored", project_id=pid)
             return
@@ -75,7 +71,25 @@ class MonitoringManager:
         self._detectors[pid] = detector
 
         async def on_log(entry: dict) -> None:
-            await detector.handle_log(entry)
+            async with AsyncSessionLocal() as db:
+
+                db_entry = LogEntry(
+                    project_id=uuid.UUID(entry["project_id"]),
+                    source=LogSource(entry["source"]),
+                    level=LogLevel(entry["level"]),
+                    message=entry["message"],
+                    container_name=entry.get("container_name"),
+                    service_name=entry.get("service_name"),
+                    raw=entry.get("raw", {}),
+                    timestamp=datetime.fromisoformat(
+                        entry["timestamp"]
+                    ),
+                )
+
+                db.add(db_entry)
+                await db.commit()
+
+                await detector.handle_log(entry)
 
         # Docker collector
         try:
@@ -95,6 +109,7 @@ class MonitoringManager:
 
         logger.info("project_monitoring_started", project_id=pid)
 
+
     async def stop_project(self, project_id: str) -> None:
         logger.info("stopping_project_monitoring", project_id=project_id)
 
@@ -104,6 +119,7 @@ class MonitoringManager:
             await collector.stop()
         if detector := self._detectors.pop(project_id, None):
             await detector.stop()
+
 
     async def restart_project(self, project_id: str) -> None:
         await self.stop_project(project_id)
@@ -116,8 +132,10 @@ class MonitoringManager:
             if project:
                 await self.start_project(project, project.owner)
 
+
     def get_gitlab_collector(self, project_id: str) -> GitLabCollector | None:
         return self._gitlab.get(project_id)
+
 
     def status(self) -> dict:
         return {

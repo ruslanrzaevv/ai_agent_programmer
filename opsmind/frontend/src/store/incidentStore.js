@@ -9,6 +9,23 @@ export const useIncidentStore = create((set, get) => ({
   error: null,
   filter: "all",
 
+  fetchIncident: async (id) => {
+    try {
+      const { data } = await incidentsAPI.get(id);
+  
+      set((s) => ({
+        selected: data,
+        incidents: s.incidents.map((i) =>
+          i.id === id ? data : i
+        ),
+      }));
+  
+      return data;
+    } catch (e) {
+      console.error(e);
+    }
+  },
+  
   fetch: async (projectId) => {
     if (!projectId) return;
     set({ loading: true, error: null });
@@ -93,6 +110,23 @@ export const useIncidentStore = create((set, get) => ({
     }
   },
 
+  generateCodeFix: async (id) => {
+    try {
+      const { data } =
+        await incidentsAPI.generateCodeFix(id);
+  
+      return {
+        ok: true,
+        ...data,
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        error: e.response?.data?.detail,
+      };
+    }
+  },
+  
   applyFix: async (id, confirmed) => {
     try {
       const { data } = await incidentsAPI.applyFix(id, confirmed);

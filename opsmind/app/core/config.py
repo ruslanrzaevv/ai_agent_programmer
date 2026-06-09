@@ -17,12 +17,16 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
-
+    
+    DATABASE_URL: str = ""
+    DATABASE_URL_SYNC: str = ""
+    
     # GEMINI 
     GEMINI_API_KEY: str = ""
     
     TELEGRAM_BOT_USERNAME: str = "QRNOpsMindBot"    
-
+    TELEGRAM_BOT_TOKEN: str = ""
+    
     # Notifications
     GMAIL_USER: str = ""
     GMAIL_PASSWORD: str = ""  

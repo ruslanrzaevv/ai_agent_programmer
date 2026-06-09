@@ -214,7 +214,11 @@ class Incident(Base):
     ai_auto_fix_script: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_fix_applied: Mapped[bool] = mapped_column(Boolean, default=False)
     ai_fix_applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
+    ai_fix_file: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_fix_old_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_fix_new_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_merge_request_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    
     timeline: Mapped[list] = mapped_column(JSONB, default=list)
     error_count: Mapped[int] = mapped_column(Integer, default=0)
     affected_containers: Mapped[list] = mapped_column(JSON, default=list)

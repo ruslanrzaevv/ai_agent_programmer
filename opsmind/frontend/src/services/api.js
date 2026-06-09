@@ -100,6 +100,10 @@ export const incidentsAPI = {
   replay: (id) => api.get(`/incidents/${id}/replay`),
   explain: (id, mode) => api.post(`/incidents/${id}/explain`, { mode, incident_id: id }),
   ask: (id, question) => api.post(`/incidents/${id}/ask`, { question, incident_id: id }),
+  generateCodeFix: (id) =>
+    api.post(
+      `/incidents/${id}/generate-code-fix`
+    ),
   applyFix: (id, confirmed) => api.post(`/incidents/${id}/apply-fix`, { confirmed }),
 };
 

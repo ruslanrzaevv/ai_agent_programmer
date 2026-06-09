@@ -1,35 +1,61 @@
 from __future__ import annotations
-
 import asyncio
 import re
 import ssl
 import tempfile
 import os
 from datetime import datetime, timezone
+import json
 
 import docker
 import docker.errors
 from tenacity import retry, stop_never, wait_exponential, retry_if_exception_type
-
 from app.core.logging import get_logger
 from app.db.redis import cache
 from app.models.models import LogEntry, LogLevel, LogSource, Project
+from app.db.redis import get_redis
 
 logger = get_logger("docker_collector")
 
 
 LEVEL_PATTERNS = {
-    LogLevel.CRITICAL: re.compile(r"\b(critical|fatal|panic|emerg)\b", re.I),
-    LogLevel.ERROR: re.compile(r"\b(error|err|exception|traceback|failed|failure)\b", re.I),
-    LogLevel.WARNING: re.compile(r"\b(warning|warn|deprecated)\b", re.I),
-    LogLevel.DEBUG: re.compile(r"\b(debug|trace)\b", re.I),
+    LogLevel.CRITICAL: re.compile(
+        r"\b(critical|fatal|panic|emerg)\b",
+        re.I,
+    ),
+
+    LogLevel.ERROR: re.compile(
+        r"(error|err|exception|traceback|failed|failure|doesnotexist|attributeerror|typeerror|valueerror|keyerror|indexerror|runtimeerror)",
+        re.I,
+    ),
+
+    LogLevel.WARNING: re.compile(
+        r"\b(warning|warn|deprecated)\b",
+        re.I,
+    ),
+
+    LogLevel.DEBUG: re.compile(
+        r"\b(debug|trace)\b",
+        re.I,
+    ),
 }
 
 
 def _detect_level(message: str) -> LogLevel:
+    lowered = message.lower()
+
+    if (
+        "doesnotexist" in lowered
+        or "traceback" in lowered
+        or "exception" in lowered
+        or "error" in lowered
+    ):
+        return LogLevel.ERROR
+
     for level, pattern in LEVEL_PATTERNS.items():
         if pattern.search(message):
             return level
+
     return LogLevel.INFO
 
 
@@ -66,14 +92,26 @@ class DockerLogCollector:
         self.on_log = on_log_callback
         self._stop_event = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
-
+        
+        
     async def start(self) -> None:
+        logger.info(
+        "DOCKER_COLLECTOR_START",
+        project_id=str(self.project.id),
+        )
         logger.info("docker_collector_start", project_id=str(self.project.id))
         client = await asyncio.get_event_loop().run_in_executor(
             None, _build_docker_client, self.project
         )
         containers = await self._list_containers(client)
+
+        logger.info(
+            "containers_found",
+            count=len(containers),
+            containers=[c.name for c in containers],
+        )        
         for container in containers:
+            print('CREATE TASK', container.name)
             task = asyncio.create_task(
                 self._stream_container(client, container),
                 name=f"docker:{self.project.id}:{container.name}",
@@ -98,10 +136,9 @@ class DockerLogCollector:
         )
 
     async def _watch_new_containers(self, client: docker.DockerClient) -> None:
-        """Periodically discover and attach to new containers."""
         known = {t.get_name().split(":")[-1] for t in self._tasks}
         while not self._stop_event.is_set():
-            await asyncio.sleep(30)
+            await asyncio.sleep(3)
             try:
                 containers = await self._list_containers(client)
                 for c in containers:
@@ -116,26 +153,42 @@ class DockerLogCollector:
             except Exception as e:
                 logger.warning("container_watch_error", error=str(e))
 
+
     async def _stream_container(self, client: docker.DockerClient, container) -> None:
-        """Stream logs from a single container with automatic reconnect."""
+        
         container_name = container.name
-        logger.info("streaming_container", container=container_name, project=str(self.project.id))
-
-        @retry(
-            stop=stop_never,
-            wait=wait_exponential(multiplier=1, min=2, max=30),
-            retry=retry_if_exception_type(Exception),
-            reraise=False,
+        print("START STREAM", container_name)
+        logger.warning(
+            "ATTACHED_TO_CONTAINER",
+            container=container_name,
         )
-        def _stream():
-            return container.logs(stream=True, follow=True, timestamps=True, tail=0)
-
         loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        traceback_buffer = []
+        collecting_traceback = False
+        
+        def _read_logs():
+            try:
+                log_gen = container.logs(stream=True, follow=True, timestamps=True, tail=0)
+                for raw_line in log_gen:
+                    if self._stop_event.is_set():
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, raw_line)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+                logger.error("container_read_error", container=container_name, error=str(e))
+
+        loop.run_in_executor(None, _read_logs)
 
         try:
-            log_gen = await loop.run_in_executor(None, _stream)
-            for raw_line in log_gen:
-                if self._stop_event.is_set():
+            while not self._stop_event.is_set():
+                try:
+                    raw_line = await asyncio.wait_for(queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                if raw_line is None:
                     break
 
                 line = raw_line.decode("utf-8", errors="replace").strip()
@@ -151,14 +204,35 @@ class DockerLogCollector:
                     except ValueError:
                         pass
 
+                if "Traceback (most recent call last):" in message:
+                    collecting_traceback = True
+                    traceback_buffer = [message]
+                    continue
+
+                if collecting_traceback:
+                    traceback_buffer.append(message)
+
+                    if (
+                        "Error:" in message
+                        or "Exception" in message
+                        or "DoesNotExist" in message
+                    ):
+                        message = "\n".join(traceback_buffer)
+                        collecting_traceback = False
+                    else:
+                        continue
+
                 level = _detect_level(message)
-                filter_levels = [l.value for l in self.project.log_level_filter] if self.project.log_level_filter else []
+                raw_filter = self.project.log_level_filter or []
+                filter_levels = [
+                    l.value if hasattr(l, "value") else str(l)
+                    for l in raw_filter
+                ]
                 should_store = (
                     not filter_levels
                     or level.value in filter_levels
                     or level in (LogLevel.ERROR, LogLevel.CRITICAL)
                 )
-
                 if not should_store:
                     continue
 
@@ -173,9 +247,15 @@ class DockerLogCollector:
                     "timestamp": timestamp.isoformat(),
                 }
 
-                await cache.lpush(f"logs:{self.project.id}", entry)
-                await cache.publish(f"project:{self.project.id}:logs", {"type": "log", "data": entry})
-
+                r = await get_redis()
+                print('REDIS PUBLISH', entry)
+                await r.publish(
+                    f"project:{self.project.id}:logs",
+                    json.dumps({"type": "log", "data": entry}, default=str)
+                )
+                print("LOG DETECTED")
+                print(entry["container_name"])
+                print(entry["message"][:200])
                 await self.on_log(entry)
 
         except asyncio.CancelledError:

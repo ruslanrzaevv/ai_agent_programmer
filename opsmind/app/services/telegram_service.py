@@ -1,15 +1,3 @@
-"""
-Telegram Bot Service для OpsMind.
-
-Как работает:
-1. Пользователь в настройках нажимает "Подключить Telegram"
-2. Сервер генерирует уникальный link_token и сохраняет в users.telegram_link_token
-3. Фронт показывает кнопку: t.me/BOT_USERNAME?start=LINK_TOKEN
-4. Пользователь нажимает /start в боте
-5. Бот получает link_token из команды /start
-6. Бот находит пользователя по токену и сохраняет telegram_chat_id
-7. Теперь при инцидентах бот шлёт сообщения напрямую в чат
-"""
 from __future__ import annotations
 
 import secrets

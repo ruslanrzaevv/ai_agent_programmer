@@ -29,10 +29,11 @@ class WebSocketService {
     };
 
     this.socket.onmessage = (event) => {
+      console.log('WS RAW', event.data)
       try {
         const data = JSON.parse(event.data);
         this._emit(data.type, data);
-        this._emit("*", data); // wildcard listener
+        this._emit("*", data);
       } catch (e) {
         console.warn("[WS] parse error", e);
       }

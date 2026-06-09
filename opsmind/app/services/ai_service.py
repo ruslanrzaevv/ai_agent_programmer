@@ -1,20 +1,29 @@
 from __future__ import annotations
+import re
+from google.genai import types
+from google import genai
+from google.genai.errors import ServerError
+from openai import OpenAI
 
-import anthropic
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.models import ExplainMode, Incident, LogEntry
 
 logger = get_logger("ai")
 
-_client: anthropic.AsyncAnthropic | None = None
+_client = None
 
 
-def get_client() -> anthropic.AsyncAnthropic:
+def get_client():
     global _client
+
     if _client is None:
-        _client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+        _client = OpenAI(
+            api_key=settings.GEMINI_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+        )
     return _client
+
 
 
 EXPLAIN_SYSTEM_PROMPTS = {
@@ -39,11 +48,32 @@ Keep it under 150 words.""",
 }
 
 
-class AIService:
-    def __init__(self) -> None:
-        self.client = get_client()
+async def _generate(prompt: str, system: str) -> str:
+    import asyncio
 
+    client = get_client()
+    loop = asyncio.get_running_loop()
 
+    response = await loop.run_in_executor(
+        None,
+        lambda: client.chat.completions.create(
+            model="openai/gpt-oss-20b:free",
+            messages=[
+                {
+                    "role": "system",
+                    "content": system,
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+        )
+    )
+
+    return response.choices[0].message.content
+    
+class AIService:    
     async def explain_incident(
         self,
         incident: Incident,
@@ -54,35 +84,61 @@ class AIService:
             f"[{e.timestamp.isoformat()}] [{e.level.upper()}] {e.container_name or ''}: {e.message}"
             for e in logs[:50]
         )
+        root_cause = self.extract_root_exception(logs)
 
-        user_prompt = f"""
-Incident Title: {incident.title}
-Severity: {incident.severity}
-Duration: {self._duration(incident)}
-Error Count: {incident.error_count}
-Affected Containers: {', '.join(incident.affected_containers) or 'unknown'}
-
-Log sample (up to 50 entries):
-{log_sample}
-
-Timeline summary:
-{self._timeline_summary(incident)}
-
-Explain this incident.
-"""
-
-        response = await self.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            system=EXPLAIN_SYSTEM_PROMPTS[mode],
-            messages=[{"role": "user", "content": user_prompt}],
+        
+        logger.warning(
+            "AI_PROMPT",
+            root_cause=root_cause,
         )
-        return response.content[0].text  # type: ignore[union-attr]
+        user_prompt = f"""
+        Incident Title: {incident.title}
+        Severity: {incident.severity}
+
+        ROOT EXCEPTIONS:
+        {root_cause}
+
+        FULL LOGS:
+        {log_sample}
+
+        Timeline summary:
+        {self._timeline_summary(incident)}
+
+        Determine the exact root cause.
+        Focus on exception names.
+        Do not describe generic Internal Server Errors.
+        """
+        return await _generate(user_prompt, EXPLAIN_SYSTEM_PROMPTS[mode])
+    
+    
+    def extract_root_exception(
+        self,
+        logs: list[LogEntry],
+    ) -> str:
+
+        priority_patterns = [
+            r"DoesNotExist",
+            r"AttributeError",
+            r"TypeError",
+            r"ValueError",
+            r"KeyError",
+            r"IndexError",
+            r"RuntimeError",
+            r"Exception",   
+            r"Traceback",
+        ]
+
+        for pattern in priority_patterns:
+            for log in reversed(logs):
+                if re.search(pattern, log.message, re.IGNORECASE):
+                    return log.message.strip()
+
+        return "Unknown"
+    
 
     async def explain_all_modes(
         self, incident: Incident, logs: list[LogEntry]
     ) -> dict[str, str]:
-        """Generate all three explanations (called once on incident creation)."""
         results = {}
         for mode in ExplainMode:
             try:
@@ -92,42 +148,28 @@ Explain this incident.
                 results[mode.value] = f"AI analysis unavailable: {e}"
         return results
 
-    # ── Fix suggestion ─────────────────────────────────────────────────────────
-
     async def suggest_fix(self, incident: Incident, logs: list[LogEntry]) -> dict[str, str]:
-        """Returns human-readable fix + optional bash/docker fix script."""
         log_sample = "\n".join(
             f"[{e.level.upper()}] {e.container_name}: {e.message}"
             for e in logs[:30]
         )
+        system = """You are a DevOps expert. Given an incident, produce:
+            1. A concise fix description (under 200 words)
+            2. An optional executable fix script (bash or docker commands only).
 
-        response = await self.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            system="""You are a DevOps expert. Given an incident, produce:
-1. A concise fix description (under 200 words)
-2. An optional executable fix script (bash or docker commands only).
+            Respond in this EXACT format:
+            DESCRIPTION:
+            <your fix description>
 
-Respond in this EXACT format:
-DESCRIPTION:
-<your fix description>
+            SCRIPT:
+            <bash script or "N/A" if not applicable>"""
 
-SCRIPT:
-<bash script or "N/A" if not applicable>
-
-Be cautious: only suggest scripts that are safe and reversible.""",
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Incident: {incident.title}\nSeverity: {incident.severity}\n\nLogs:\n{log_sample}",
-                }
-            ],
+        text = await _generate(
+            f"Incident: {incident.title}\nSeverity: {incident.severity}\n\nLogs:\n{log_sample}",
+            system,
         )
 
-        text = response.content[0].text  # type: ignore[union-attr]
-        description = ""
-        script = ""
-
+        description, script = "", ""
         if "DESCRIPTION:" in text and "SCRIPT:" in text:
             parts = text.split("SCRIPT:")
             description = parts[0].replace("DESCRIPTION:", "").strip()
@@ -137,8 +179,6 @@ Be cautious: only suggest scripts that are safe and reversible.""",
             description = text
 
         return {"description": description, "script": script}
-
-    # ── Free-form question about an incident ──────────────────────────────────
 
     async def ask(
         self,
@@ -155,18 +195,8 @@ Be cautious: only suggest scripts that are safe and reversible.""",
             context += "Recent logs:\n" + "\n".join(
                 f"[{e.level}] {e.message}" for e in context_logs[:20]
             )
-
-        response = await self.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            system="You are an expert DevOps assistant for the OpsMind monitoring platform. Answer clearly and concisely.",
-            messages=[
-                {"role": "user", "content": f"{context}\n\nQuestion: {question}"},
-            ],
-        )
-        return response.content[0].text  # type: ignore[union-attr]
-
-    # ── Helpers ────────────────────────────────────────────────────────────────
+        system = "You are an expert DevOps assistant for the OpsMind monitoring platform. Answer clearly and concisely."
+        return await _generate(f"{context}\n\nQuestion: {question}", system)
 
     @staticmethod
     def _duration(incident: Incident) -> str:
@@ -187,3 +217,195 @@ Be cautious: only suggest scripts that are safe and reversible.""",
                 f"event={point.get('event', '')}"
             )
         return "\n".join(lines)
+    
+    
+    async def generate_code_fix(
+    self,
+    logs: str,
+    source_code: str,
+    repo_context: dict,
+    ):
+        system = """
+        You are a Senior Python Software Engineer.
+
+        Analyze:
+
+        1. Error logs
+        2. Source code
+
+        Your task:
+
+        - Fix ONLY the bug described in logs.
+        - Preserve all existing business logic.
+        - Do NOT refactor code.
+        - Do NOT rename variables.
+        - Do NOT change imports.
+        - Do NOT modify unrelated functions.
+        - Do NOT change request.user to request.
+        - Do NOT change authentication logic.
+        - Change the minimum number of lines possible.
+        - If you are not 100% sure, return the original code unchanged.
+
+        Return ONLY JSON.
+
+        Format:
+
+        {
+            "problem": "",
+            "explanation": "",
+            "fixed_file": "",
+            "commit_message": ""
+        }
+
+        IMPORTANT:
+
+        fixed_file MUST contain the COMPLETE corrected source file.
+
+        Return the entire file with ONLY the required bug fix applied.
+
+        No markdown.
+        No explanations outside JSON.
+        
+        AND Use ONLY the provided source code.
+        Do not assume any other file version exists.
+        
+        CRITICAL RULES:
+
+        You are NOT allowed to refactor code.
+
+        You are NOT allowed to improve architecture.
+
+        You are NOT allowed to rename variables, functions, classes, imports, URLs, views, models, serializers, or templates.
+
+        You are NOT allowed to modify unrelated code.
+
+        You must ONLY fix the exact error shown in the logs.
+
+        Preserve all existing business logic.
+
+        Preserve all existing function names.
+
+        Preserve all existing imports unless the error explicitly requires changing them.
+
+        Preserve formatting and structure of the file.
+
+        If the error can be fixed by changing fewer than 10 lines, change fewer than 10 lines.
+
+        Never replace request.user with another variable unless the logs explicitly prove it is incorrect.
+
+        Never rewrite the entire function when a small patch is sufficient.
+
+        Return the COMPLETE file with ONLY the necessary bug fix applied.
+
+        Use ONLY the provided source code.
+
+        Do not invent missing files.
+
+        Do not assume any other version of the code exists.
+
+        Your goal is to create the smallest possible safe patch.
+        """        
+        prompt = f"""
+        Logs:
+
+        {logs}
+        
+        Repository context:
+
+        {repo_context}
+
+        Source code:
+
+        {source_code}
+        """
+
+        text = await _generate(
+            prompt,
+                system,
+         )
+
+        return text
+    
+    async def review_patch(
+    self,
+    old_code: str,
+    new_code: str,
+    ):
+            system = """
+        You are a Staff Engineer.
+
+        Review proposed code changes.
+
+        Return ONLY JSON.
+
+        {
+            "safe": true,
+            "reason": ""
+        }
+
+        safe=false if patch may break application.
+        """
+
+            prompt = f"""
+        OLD CODE:
+
+        {old_code}
+
+        NEW CODE:
+
+        {new_code}
+        """
+
+            text = await _generate(
+                prompt,
+                system,
+            )
+
+            return text
+        
+    async def locate_file(
+        self,
+        logs: str,
+        files: list[str],
+    ):
+            system = """
+        You are a Senior Software Engineer.
+
+        Your task:
+
+        Given:
+        1. Error logs
+        2. Repository file list
+
+        Find the MOST likely file that contains the bug.
+
+        Return ONLY JSON.
+
+        Format:
+
+        {
+            "file": "",
+            "confidence": 0.0,
+            "reason": ""
+        }
+
+        No markdown.
+        No explanations outside JSON.
+        """
+
+            prompt = f"""
+        Logs:
+
+        {logs}
+
+        Repository files:
+
+        {chr(10).join(files)}
+        """
+
+            text = await _generate(
+                prompt,
+                system,
+            )
+
+            return text
