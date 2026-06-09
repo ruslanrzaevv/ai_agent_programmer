@@ -28,3 +28,4 @@ psutil==5.9.8
 flower==2.0.1
 psycopg2-binary==2.9.9
 google-genai==1.21.1
+openai==1.93.0
