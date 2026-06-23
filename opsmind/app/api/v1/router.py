@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, health, incidents, logs, projects, users, ai_setup, telegram
+from app.api.v1.endpoints import auth, health, incidents, logs, projects, users, ai_setup, telegram, orbit
 
 api_router = APIRouter(prefix="/api/v1")
 
@@ -12,3 +12,4 @@ api_router.include_router(incidents.router)
 api_router.include_router(logs.router)
 api_router.include_router(ai_setup.router)
 api_router.include_router(telegram.router)
+api_router.include_router(orbit.router)

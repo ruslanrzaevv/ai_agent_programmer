@@ -54,7 +54,6 @@ export default function AuthPage() {
     e.preventDefault();
 
     if (tab === "login") {
-      // Логин по email или телефону
       const identifier = form.email || form.phone;
       const res = await login(identifier, form.password);
       if (res.ok) navigate("/");

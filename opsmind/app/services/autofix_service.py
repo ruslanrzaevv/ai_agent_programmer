@@ -36,9 +36,15 @@ class AutoFixService:
             if item["type"] == "blob":
                 files.append(item["path"])
 
+        orbit_context = {
+            "root_component": incident.orbit_root_cause,
+            "affected_files": incident.orbit_affected_files,
+        }
+        
         located = await self.ai.locate_file(
             logs,
             files,
+            orbit_context
         )
         if located is None:
             return {

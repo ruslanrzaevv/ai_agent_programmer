@@ -15,7 +15,7 @@ export default function IncidentDetail({ incident, onClose, onReplay }) {
   const [aiContent, setAiContent] = useState({
     junior: incident.ai_explanation_junior,
     senior: incident.ai_explanation_senior,
-    ceo:    incident.ai_explanation_ceo,
+    ceo: incident.ai_explanation_ceo,
   });
   const [loadingMode, setLoadingMode] = useState(null);
   const [question, setQuestion] = useState("");
@@ -34,16 +34,33 @@ export default function IncidentDetail({ incident, onClose, onReplay }) {
     fetchIncident,
   } = useIncidentStore();
   const sev = SEV_CONFIG[incident.severity] || SEV_CONFIG.low;
-  const st  = STATUS_CONFIG[incident.status] || STATUS_CONFIG.open;
+  const st = STATUS_CONFIG[incident.status] || STATUS_CONFIG.open;
   const duration = durationMinutes(incident.started_at, incident.resolved_at);
-  
+
   const selected = useIncidentStore((s) => s.selected);
+
+  console.log(
+    "ROOT",
+    selected?.orbit_root_cause
+  );
+  
+  console.log(
+    "GRAPH",
+    selected?.orbit_dependency_graph
+  );
+
+  console.log("INCIDENT =", incident);
+  console.log("SELECTED =", selected);
+
   async function handleExplain(m) {
-    if (aiContent[m]) { setMode(m); return; }
+    if (aiContent[m]) {
+      setMode(m);
+      return;
+    }
     setMode(m);
     setLoadingMode(m);
     const res = await explain(incident.id, m);
-    setAiContent(prev => ({ ...prev, [m]: res.content }));
+    setAiContent((prev) => ({ ...prev, [m]: res.content }));
     setLoadingMode(null);
   }
 
@@ -238,7 +255,80 @@ export default function IncidentDetail({ incident, onClose, onReplay }) {
           </div>
         </div>
 
-        {/* Fix suggestion */}
+        <Card style={{ marginBottom: 20, padding: 16 }}>
+          {/* Orbit Analysis */}
+<div style={{ marginBottom: 20, background: COLORS.bg, borderRadius: 12, padding: 18, border: `1px solid ${COLORS.border}` }}>
+  <div style={{ fontSize: 11, color: COLORS.accent, fontFamily: "'Space Mono', monospace", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 14 }}>
+    🛰 Orbit Analysis
+  </div>
+  
+  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+    {[
+      { label: "Root Cause", value: incident?.orbit_root_cause || "Unknown", color: COLORS.red },
+      { label: "Error Line", value: incident?.orbit_error_line ? `line ${incident.orbit_error_line}` : "—", color: COLORS.orange },
+      { label: "Risk Score", value: incident?.orbit_risk_score || 0, color: COLORS.yellow },
+      { label: "Blast Radius", value: incident?.orbit_blast_radius || 0, color: COLORS.red },
+      { label: "Definitions", value: incident?.orbit_definitions || 0, color: COLORS.accent },
+      { label: "Imports", value: incident?.orbit_imports || 0, color: COLORS.accent },
+      { label: "Calls", value: incident?.orbit_calls || 0, color: COLORS.green },
+    ].map(s => (
+      <div key={s.label} style={{ background: COLORS.surface, borderRadius: 8, padding: "10px 12px", border: `1px solid ${COLORS.border}` }}>
+        <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Space Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+          {s.label}
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: s.color, fontFamily: "'Space Mono', monospace" }}>
+          {s.value}
+        </div>
+      </div>
+    ))}
+  </div>
+
+  {incident?.orbit_affected_files?.length > 0 && (
+    <div>
+      <div style={{ fontSize: 10, color: COLORS.textMuted, fontFamily: "'Space Mono', monospace", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
+        Affected Files
+      </div>
+      {incident.orbit_affected_files.map(f => (
+        <div key={f} style={{ fontSize: 12, color: COLORS.accent, fontFamily: "monospace", padding: "3px 0" }}>📄 {f}</div>
+      ))}
+    </div>
+  )}
+</div>
+
+{/* Repository Impact */}
+<div style={{ marginBottom: 20, background: COLORS.bg, borderRadius: 12, padding: 18, border: `1px solid ${COLORS.border}` }}>
+  <div style={{ fontSize: 11, color: COLORS.accent, fontFamily: "'Space Mono', monospace", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 14 }}>
+    🔗 Repository Impact
+  </div>
+
+  {(() => {
+    const graph = selected?.orbit_dependency_graph?.graph?.graph;
+    if (!graph || typeof graph !== "string") return <div style={{ color: COLORS.textMuted, fontSize: 12 }}>No dependency data</div>;
+    const lines = graph.split("\n").filter(l =>
+      l.includes("|") && !l.includes("---") &&
+      !l.includes("relationship_kind") && l.trim()
+    );
+    if (!lines.length) return <div style={{ color: COLORS.textMuted, fontSize: 12 }}>No dependencies found</div>;
+    return lines.map((line, i) => {
+      const parts = line.split("|").map(p => p.trim()).filter(Boolean);
+      if (parts.length < 3) return null;
+      const [kind, targetFile, targetName] = parts;
+      const color = kind === "CALLS" ? COLORS.orange : kind === "IMPORTS" ? COLORS.accent : COLORS.green;
+      return (
+        <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: `1px solid ${COLORS.border}15` }}>
+          <span style={{ background: `${color}20`, color, padding: "2px 8px", borderRadius: 4, fontFamily: "monospace", fontSize: 10, fontWeight: 700, flexShrink: 0, minWidth: 60, textAlign: "center" }}>
+            {kind}
+          </span>
+          <span style={{ color: COLORS.textSecondary, fontFamily: "monospace", fontSize: 11, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {targetFile}
+          </span>
+          {targetName && <span style={{ color: COLORS.textMuted, fontFamily: "monospace", fontSize: 11, flexShrink: 0 }}>→ {targetName}</span>}
+        </div>
+      );
+    });
+  })()}
+</div>
+        </Card>
         <div style={{ marginBottom: 20 }}>
           <div
             style={{
@@ -259,8 +349,8 @@ export default function IncidentDetail({ incident, onClose, onReplay }) {
                 console.log(result);
                 if (result.ok) {
                   const updated = await fetchIncident(selected.id);
-                  console.log('UPDATED INCIDENT =', updated)
-                  console.log('AI-FIX =', updated?.ai_fix_new_code)
+                  console.log("UPDATED INCIDENT =", updated);
+                  console.log("AI-FIX =", updated?.ai_fix_new_code);
                 }
                 console.log("FIX RESULT =", JSON.stringify(result, null, 2));
               }}

@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.deps import get_current_user, get_project_for_user
 from app.db.session import get_db
 from app.models.models import Project, User
-from app.schemas.schemas import ProjectCreate, ProjectOut, ProjectUpdate
+from app.schemas.schemas import ProjectCreate, ProjectOut, ProjectUpdate, OrbitAnalysisResponse
 from app.workers.monitoring_manager import monitoring_manager
+
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -36,8 +37,35 @@ async def create_project(
     db.add(project)
     await db.commit()
     await db.refresh(project)
+    
+    from app.services.gitlab_service import GitLabService
+    from app.services.orbit_service import OrbitService
 
-    # Start realtime monitoring immediately
+    gitlab = GitLabService(
+        project.gitlab_url,
+        project.gitlab_token,
+        project.gitlab_project_id,
+    )
+
+    repo_path = (
+        f"repos/{project.id}"
+    )
+
+    gitlab.clone_repository(
+        repo_path
+    )
+
+    orbit = OrbitService(
+        project.gitlab_url,
+        project.gitlab_token,
+        project.gitlab_project_id,
+    )
+
+    orbit.build_graph(
+        repo_path
+    )
+        
+
     await monitoring_manager.start_project(project, current_user)
 
     return project
@@ -97,3 +125,4 @@ async def resume_monitoring(
     await monitoring_manager.start_project(project, current_user)
     await db.refresh(project)
     return project
+

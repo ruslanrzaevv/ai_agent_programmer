@@ -1,8 +1,3 @@
-"""
-WebSocket connection manager.
-Handles realtime push of logs, incidents, and metrics to connected clients.
-Bridges Redis pub/sub → WebSocket.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -17,15 +12,8 @@ logger = get_logger("ws_manager")
 
 
 class ConnectionManager:
-    """
-    Manages active WebSocket connections grouped by project_id.
-    Each connection gets its own Redis subscriber task.
-    """
-
     def __init__(self):
-        # project_id -> set of WebSocket connections
         self._connections: dict[str, set[WebSocket]] = defaultdict(set)
-        # ws -> task
         self._tasks: dict[WebSocket, asyncio.Task] = {}
 
     async def connect(self, websocket: WebSocket, project_id: str, user_id: str) -> None:

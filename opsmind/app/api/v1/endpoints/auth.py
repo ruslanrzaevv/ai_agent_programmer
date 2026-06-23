@@ -17,29 +17,27 @@ def _auth_svc(db: AsyncSession = Depends(get_db)) -> AuthService:
     return AuthService(db)
 
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register")
 async def register(
     req: RegisterRequest,
     background: BackgroundTasks,
     svc: AuthService = Depends(_auth_svc),
-    db: AsyncSession = Depends(get_db),
 ):
+    user = await svc.register(req)
 
-    try:
-        user = await svc.register(req)
-        tokens = await svc._issue_tokens(user)  # noqa: SLF001
-        await db.commit()
+    if req.email:
+        background.add_task(
+            svc.send_verification_code,
+            req.email,
+            "register"
+        )
 
-        if req.email:
-            background.add_task(svc.send_verification_code, req.email, "register")
-        elif req.phone:
-            background.add_task(svc.send_verification_code, req.phone, "register")
-
-        return tokens
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
-
-
+    return {
+        "success": True,
+        "target": req.email
+    }
+    
+    
 @router.post("/send-code")
 async def send_code(
     target: str,
@@ -60,19 +58,30 @@ async def send_code(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.post("/verify")
+@router.post("/verify", response_model=TokenResponse)
 async def verify(
     req: VerifyRequest,
     svc: AuthService = Depends(_auth_svc),
     db: AsyncSession = Depends(get_db),
 ):
-    """Проверить код подтверждения."""
-    ok = await svc.verify_code(req.target, req.code, req.purpose)
-    if not ok:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Неверный или истёкший код")
-    await db.commit()
-    return {"verified": True}
+    ok = await svc.verify_code(
+        req.target,
+        req.code,
+        req.purpose
+    )
 
+    if not ok:
+        raise HTTPException(400, "Invalid code")
+
+    user = await svc._find_user(req.target)
+
+    user.is_verified = True
+
+    tokens = await svc._issue_tokens(user)
+
+    await db.commit()
+
+    return tokens
 
 @router.post("/login", response_model=TokenResponse)
 async def login(

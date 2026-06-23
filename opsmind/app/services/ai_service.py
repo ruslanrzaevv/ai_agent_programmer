@@ -79,13 +79,15 @@ class AIService:
         incident: Incident,
         logs: list[LogEntry],
         mode: ExplainMode,
+        orbit_context=None,
     ) -> str:
+        orbit_context = orbit_context or {}
+        
         log_sample = "\n".join(
             f"[{e.timestamp.isoformat()}] [{e.level.upper()}] {e.container_name or ''}: {e.message}"
             for e in logs[:50]
         )
         root_cause = self.extract_root_exception(logs)
-
         
         logger.warning(
             "AI_PROMPT",
@@ -93,14 +95,27 @@ class AIService:
         )
         user_prompt = f"""
         Incident Title: {incident.title}
-        Severity: {incident.severity}
 
         ROOT EXCEPTIONS:
         {root_cause}
 
-        FULL LOGS:
-        {log_sample}
+        ORBIT ANALYSIS:
 
+        Root Component:
+        {orbit_context.get("root_component")}
+
+        Affected Services:
+        {orbit_context.get("affected_services")}
+
+        Affected Files:
+        {orbit_context.get("affected_files")}
+
+        Risk Score:
+        {orbit_context.get("risk_score")}
+
+        FULL LOGS:
+
+        {log_sample}
         Timeline summary:
         {self._timeline_summary(incident)}
 
@@ -139,16 +154,24 @@ class AIService:
     async def explain_all_modes(
         self, incident: Incident, logs: list[LogEntry]
     ) -> dict[str, str]:
+        orbit_context = {
+            "root_component": incident.orbit_root_cause,
+            "affected_files": incident.orbit_affected_files,
+            "affected_services": incident.orbit_affected_services,
+            "risk_score": incident.orbit_risk_score,
+        }
         results = {}
         for mode in ExplainMode:
             try:
-                results[mode.value] = await self.explain_incident(incident, logs, mode)
+                results[mode.value] = await self.explain_incident(incident, logs, mode, orbit_context,)
             except Exception as e:
                 logger.error("ai_explain_failed", mode=mode.value, error=str(e))
                 results[mode.value] = f"AI analysis unavailable: {e}"
         return results
 
-    async def suggest_fix(self, incident: Incident, logs: list[LogEntry]) -> dict[str, str]:
+
+    async def suggest_fix(self, incident: Incident, logs: list[LogEntry], orbit_context=None) -> dict[str, str]:
+        orbit_context = orbit_context or {}
         log_sample = "\n".join(
             f"[{e.level.upper()}] {e.container_name}: {e.message}"
             for e in logs[:30]
@@ -163,9 +186,34 @@ class AIService:
 
             SCRIPT:
             <bash script or "N/A" if not applicable>"""
+            
+        orbit_text = f"""
+        Root Cause:
+        {orbit_context.get("root_component")}
+
+        Affected Services:
+        {orbit_context.get("affected_services")}
+
+        Affected Files:
+        {orbit_context.get("affected_files")}
+
+        Risk Score:
+        {orbit_context.get("risk_score")}
+        """
+
+        prompt = f"""
+        Incident: {incident.title}
+        Severity: {incident.severity}
+
+        {orbit_text}
+
+        Logs:
+
+        {log_sample}
+        """
 
         text = await _generate(
-            f"Incident: {incident.title}\nSeverity: {incident.severity}\n\nLogs:\n{log_sample}",
+            prompt,
             system,
         )
 
@@ -179,6 +227,7 @@ class AIService:
             description = text
 
         return {"description": description, "script": script}
+
 
     async def ask(
         self,
@@ -198,12 +247,14 @@ class AIService:
         system = "You are an expert DevOps assistant for the OpsMind monitoring platform. Answer clearly and concisely."
         return await _generate(f"{context}\n\nQuestion: {question}", system)
 
+
     @staticmethod
     def _duration(incident: Incident) -> str:
         end = incident.resolved_at or incident.updated_at
         delta = end - incident.started_at
         minutes = int(delta.total_seconds() / 60)
         return f"{minutes} minutes"
+
 
     @staticmethod
     def _timeline_summary(incident: Incident) -> str:
@@ -309,10 +360,23 @@ class AIService:
         Logs:
 
         {logs}
-        
-        Repository context:
 
-        {repo_context}
+        Orbit Analysis:
+
+        Root Cause:
+        {repo_context.get("orbit_root_cause")}
+
+        Affected Services:
+        {repo_context.get("affected_services")}
+
+        Affected Files:
+        {repo_context.get("affected_files")}
+
+        Risk Score:
+        {repo_context.get("risk_score")}
+
+        Blast Radius:
+        {repo_context.get("blast_radius")}
 
         Source code:
 
@@ -326,6 +390,7 @@ class AIService:
 
         return text
     
+
     async def review_patch(
     self,
     old_code: str,
@@ -367,6 +432,7 @@ class AIService:
         self,
         logs: str,
         files: list[str],
+        orbit_context=None,
     ):
             system = """
         You are a Senior Software Engineer.
@@ -394,14 +460,19 @@ class AIService:
         """
 
             prompt = f"""
-        Logs:
+            Logs:
 
-        {logs}
+            {logs}
 
-        Repository files:
+            Orbit Context:
 
-        {chr(10).join(files)}
-        """
+            Root Component:
+            {orbit_context}
+
+            Repository files:
+
+            {chr(10).join(files)}
+            """
 
             text = await _generate(
                 prompt,

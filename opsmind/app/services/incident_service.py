@@ -19,6 +19,7 @@ from app.models.models import (
 from app.services.ai_service import AIService
 from app.services.notification_service import NotificationService
 from app.services.gitlab_service import GitLabService
+from app.services.orbit_service import OrbitService
 
 logger = get_logger("incidents")
 
@@ -43,8 +44,8 @@ class IncidentService:
         self,
         project: Project,
         triggering_logs: list[LogEntry],
-        owner: User,
-    ) -> Incident:
+        owner: User,) -> Incident:
+        
         triggering_logs = sorted(
             triggering_logs,
             key=lambda x: x.timestamp,
@@ -66,14 +67,107 @@ class IncidentService:
             started_at=first_log.timestamp,
             timeline=[],
         )
+        
+        logger.warning("BEFORE_ADD_INCIDENT")
+        
         self.db.add(incident)
+        
+        logger.warning("BEFORE_FLUSH_INCIDENT")
+
+        
         await self.db.flush()
 
+        logger.warning(
+            "INCIDENT_FLUSHED",
+            incident_id=str(incident.id),
+        )
+        
         for log in triggering_logs:
             self.db.add(IncidentLog(incident_id=incident.id, log_entry_id=log.id))
 
         await self.db.flush()
         logger.info("incident_created", incident_id=str(incident.id), severity=severity)
+
+        gitlab = GitLabService(
+            project.gitlab_url,
+            project.gitlab_token,
+            project.gitlab_project_id,
+        )
+
+        repo_path = (
+            f"repos/{project.id}"
+        )
+
+        gitlab.pull_repository(
+            repo_path
+        )
+
+        orbit = OrbitService(
+            project.gitlab_url,
+            project.gitlab_token,
+            project.gitlab_project_id,
+        )
+
+        orbit.build_graph(
+            repo_path
+        )
+        
+        orbit = OrbitService(
+            project.gitlab_url,
+            project.gitlab_token,
+            project.gitlab_project_id,
+        )
+
+        orbit_result = await orbit.find_root_cause(
+            "\n".join(
+                x.message
+                for x in triggering_logs
+            )
+        )
+        
+        blast = {
+            "score": 0,
+            "definitions": 0,
+            "imports": 0,
+        }
+
+        dependency_graph = {}
+
+        if orbit_result["affected_files"]:
+
+            blast = await orbit.blast_radius(
+                orbit_result["affected_files"][0]
+            )
+
+            dependency_graph = await orbit.repository_impact(
+                orbit_result["affected_files"][0]
+            )
+
+        risk_score = min(
+            blast["definitions"]
+            + blast["imports"] * 2,
+            100,
+        )
+
+        incident.orbit_root_cause = orbit_result["root_component"]
+        
+        incident.orbit_error_line = (orbit_result.get("error_line"))
+        
+        incident.orbit_risk_score = orbit_result["risk_score"]
+
+        incident.orbit_affected_files = orbit_result["affected_files"]
+
+        incident.orbit_affected_services = orbit_result["affected_services"]
+        
+        incident.orbit_blast_radius = (blast["score"])
+
+        incident.orbit_definitions = (blast["definitions"])
+
+        incident.orbit_imports = (blast["imports"])
+        
+        incident.orbit_calls = (blast.get("calls", 0))
+        
+        incident.orbit_dependency_graph = (dependency_graph)
 
         try:
             explanations = await self.ai.explain_all_modes(incident, triggering_logs)
@@ -88,7 +182,8 @@ class IncidentService:
             logger.error("ai_analysis_failed", error=str(e))
 
         incident.timeline = self._build_timeline(triggering_logs)
-
+        
+        
         from app.db.redis import get_redis
         import json
         r = await get_redis()
@@ -185,6 +280,30 @@ class IncidentService:
 
             review_data = json.loads(review)
 
+            orbit_report = f"""
+            ## Orbit Analysis
+
+            Root Cause:
+            {incident.orbit_root_cause}
+
+            Affected Files:
+            {incident.orbit_affected_files}
+
+            Affected Services:
+            {incident.orbit_affected_services}
+
+            Risk Score:
+            {incident.orbit_risk_score}
+
+            Blast Radius:
+            {incident.orbit_blast_radius}
+
+            Definitions:
+            {incident.orbit_definitions}
+
+            Imports:
+            {incident.orbit_imports}
+            """
             if not review_data["safe"]:
                 return {
                     "success": False,
@@ -244,6 +363,7 @@ class IncidentService:
         timeline.append(point)
         incident.timeline = timeline
         await self.db.flush()
+        
 
 
     async def _get_or_raise(self, incident_id: uuid.UUID) -> Incident:
@@ -328,10 +448,10 @@ class IncidentService:
 
         return timeline
     
+    
     async def generate_gitlab_fix(
     self,
-    incident_id,
-):
+    incident_id,):
         incident = await self._get_or_raise(
             incident_id
         )
@@ -347,8 +467,6 @@ class IncidentService:
             project.gitlab_project_id,
         )
 
-        files = gitlab.list_python_files()
-
         logs_text = "\n".join(
             [
                 log.log_entry.message
@@ -356,10 +474,26 @@ class IncidentService:
                 if log.log_entry
             ]
         )
+        
+        orbit = OrbitService(
+            project.gitlab_url,
+            project.gitlab_token,
+            project.gitlab_project_id,
+        )
 
+        orbit_result = await orbit.find_root_cause(
+            logs_text
+        )
+
+        candidate_files = (
+            orbit_result["affected_files"]
+        )
+        if not candidate_files:
+            candidate_files = gitlab.list_python_files()    
+            
         file_response = await self.ai.locate_file(
             logs_text,
-            files,
+            candidate_files,
         )
 
         file_data = json.loads(
@@ -372,9 +506,18 @@ class IncidentService:
             target_file
         )
 
+        orbit_context = {
+        "orbit_root_cause": incident.orbit_root_cause,
+        "affected_services": incident.orbit_affected_services,
+        "affected_files": incident.orbit_affected_files,
+        "risk_score": incident.orbit_risk_score,
+        "blast_radius": incident.orbit_blast_radius,
+        }
+
         fix_response = await self.ai.generate_code_fix(
-            logs_text,
-            source_code,
+        logs_text,
+        source_code,
+        orbit_context,
         )
 
         fix_data = json.loads(
@@ -382,8 +525,8 @@ class IncidentService:
         )
 
         review_response = await self.ai.review_patch(
-            fix_data["old_code"],
-            fix_data["new_code"],
+            source_code,
+            fix_data["fixed_file"],
         )
 
         review_data = json.loads(
@@ -398,12 +541,10 @@ class IncidentService:
 
         incident.ai_fix_file = target_file
 
-        incident.ai_fix_old_code = (
-            fix_data["old_code"]
-        )
+        incident.ai_fix_old_code = source_code
 
         incident.ai_fix_new_code = (
-            fix_data["new_code"]
+            fix_data["fixed_file"]
         )
 
         incident.ai_fix_suggestion = (
@@ -417,6 +558,6 @@ class IncidentService:
             "file": target_file,
             "problem": fix_data["problem"],
             "explanation": fix_data["explanation"],
-            "old_code": fix_data["old_code"],
-            "new_code": fix_data["new_code"],
+            "old_code": source_code,
+            "new_code": fix_data["fixed_file"],
         }

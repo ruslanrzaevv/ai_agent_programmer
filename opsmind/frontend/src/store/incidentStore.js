@@ -138,4 +138,15 @@ export const useIncidentStore = create((set, get) => ({
 
   setFilter: (filter) => set({ filter }),
   clearSelected: () => set({ selected: null, replay: null }),
+
+  fetchOrbit: async (id) => {
+    try {
+      const { data } =
+        await incidentsAPI.orbit(id);
+  
+      return data;
+    } catch {
+      return null;
+    }
+  },
 }));

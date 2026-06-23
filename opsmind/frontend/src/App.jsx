@@ -15,7 +15,6 @@ import SettingsPage from "./pages/SettingsPage";
 import { Spinner } from "./components/ui";
 import { COLORS } from "./utils/constants";
 
-// ─── Глобальный WebSocket — работает на всех страницах ────────────────────────
 function GlobalWebSocket() {
   const { activeProject } = useProjectStore();
   const pushLog     = useLogStore((s) => s.pushRealtime);
@@ -24,7 +23,6 @@ function GlobalWebSocket() {
   useEffect(() => {
     if (!activeProject?.id) return;
 
-    // Подключаемся глобально — соединение НЕ рвётся при смене страницы
     wsService.connect(activeProject.id);
 
     const offLog = wsService.on("log", (msg) => {
@@ -35,21 +33,18 @@ function GlobalWebSocket() {
       if (msg) addIncident(msg);
     });
 
-    // Держим соединение живым
     const ping = setInterval(() => wsService.ping(), 25000);
 
     return () => {
       offLog();
       offIncident();
       clearInterval(ping);
-      // НЕ вызываем wsService.disconnect() — соединение остаётся
     };
   }, [activeProject?.id, pushLog, addIncident]);
 
-  return null; // Не рендерит ничего
+  return null; 
 }
 
-// ─── Auth guard ────────────────────────────────────────────────────────────────
 function ProtectedRoute({ children }) {
   const { user, initialized } = useAuthStore();
   if (!initialized) {
@@ -66,7 +61,6 @@ function ProtectedRoute({ children }) {
   return user ? children : <Navigate to="/login" replace />;
 }
 
-// ─── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const { init, user }          = useAuthStore();
   const { fetch: fetchProjects } = useProjectStore();

@@ -164,19 +164,27 @@ class IncidentDetector:
         incident_logs = list(self._recent_logs)
         self._recent_logs.clear()
 
-        asyncio.create_task(
-            self._create_incident(incident_logs)
-        )
+        await self._create_incident(incident_logs)
         
-    async def _create_incident(self, log_dicts: list[dict]) -> None:
+        
+    async def _create_incident(
+        self,
+        log_dicts: list[dict],
+    ) -> None:
+
+        logger.warning("CREATE_INCIDENT_STARTED")
+
         from app.services.incident_service import IncidentService
         from app.models.models import LogEntry, LogSource
 
         try:
             async with self.db_factory() as db:
-                # Persist log entries first
+
+                logger.warning("DB_OPENED")
+
                 log_objects = []
-                for entry in log_dicts[:100]:  # cap at 100 per incident
+
+                for entry in log_dicts[:100]:
                     le = LogEntry(
                         project_id=uuid.UUID(entry["project_id"]),
                         source=LogSource(entry["source"]),
@@ -185,16 +193,35 @@ class IncidentDetector:
                         container_name=entry.get("container_name"),
                         service_name=entry.get("service_name"),
                         raw=entry.get("raw", {}),
-                        timestamp=datetime.fromisoformat(entry["timestamp"]),
+                        timestamp=datetime.fromisoformat(
+                            entry["timestamp"]
+                        ),
                     )
+
                     db.add(le)
                     log_objects.append(le)
 
                 await db.flush()
 
+                logger.warning("BEFORE_CREATE_FROM_LOGS")
+
                 svc = IncidentService(db)
-                await svc.create_from_logs(self.project, log_objects, self.owner)
+
+                await svc.create_from_logs(
+                    self.project,
+                    log_objects,
+                    self.owner,
+                )
+
+                logger.warning("AFTER_CREATE_FROM_LOGS")
+
                 await db.commit()
 
         except Exception as e:
-            logger.error("incident_creation_failed", error=str(e), exc_info=True)
+            import traceback
+
+            logger.error(
+                "INCIDENT_CREATE_FAILED",
+                error=str(e),
+                traceback=traceback.format_exc(),
+            )

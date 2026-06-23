@@ -4,7 +4,7 @@ from enum import Enum as PyEnum
 
 from sqlalchemy import (
     Boolean, DateTime, Enum, Float, ForeignKey,
-    Integer, String, Text, UniqueConstraint, JSON, BigInteger,
+    Integer, String, Text, UniqueConstraint, JSON, BigInteger, Column,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -234,7 +234,17 @@ class Incident(Base):
     project: Mapped[Project] = relationship("Project", back_populates="incidents")
     logs: Mapped[list["IncidentLog"]] = relationship("IncidentLog", back_populates="incident")
     notifications: Mapped[list["Notification"]] = relationship("Notification", back_populates="incident")
-
+    
+    orbit_root_cause = Column(String, nullable=True)
+    orbit_risk_score = Column(Integer, default=0)
+    orbit_affected_files = Column(JSON, default=list)
+    orbit_affected_services = Column(JSON, default=list)
+    orbit_blast_radius = Column(Integer, default=0)
+    orbit_definitions = Column(Integer, default=0)
+    orbit_imports = Column(Integer, default=0)
+    orbit_calls = Column(Integer, default=0)
+    orbit_dependency_graph = Column(JSON, default=dict)    
+    orbit_error_line = Column(Integer, nullable=True)
 
 class IncidentLog(Base):
     __tablename__ = "incident_logs"

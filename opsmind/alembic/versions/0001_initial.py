@@ -9,7 +9,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ── users ──────────────────────────────────────────────────────────────────
     op.create_table(
         "users",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),

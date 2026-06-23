@@ -24,24 +24,30 @@ export const useAuthStore = create((set, get) => ({
   // ── Register ────────────────────────────────────────────────────────────────
   register: async (formData) => {
     set({ loading: true, error: null });
+  
     try {
       const { data } = await authAPI.register(formData);
   
-      localStorage.setItem("access_token", data.access_token);
-      localStorage.setItem("refresh_token", data.refresh_token);
+      set({ loading: false });
   
-      const me = await authAPI.me();
-  
-      set({ user: me.data, loading: false });
-  
-      return { ok: true };
+      return {
+        ok: true,
+        target: data.target,
+      };
     } catch (e) {
       const msg = e.response?.data?.detail || "Registration failed";
-      set({ error: msg, loading: false });
-      return { ok: false, error: msg };
+  
+      set({
+        error: msg,
+        loading: false,
+      });
+  
+      return {
+        ok: false,
+        error: msg,
+      };
     }
   },
-
   // ── Login ───────────────────────────────────────────────────────────────────
   login: async (identifier, password) => {
     set({ loading: true, error: null });

@@ -1,7 +1,8 @@
 import gitlab
 import base64
 import time
-
+import subprocess
+from pathlib import Path
 
 class GitLabService:
 
@@ -81,18 +82,6 @@ class GitLabService:
             "title": f"OpsMind AI Fix {source_branch}",
         })
         
-    def list_python_files(self):
-        tree = self.project.repository_tree(
-            recursive=True,
-            all=True,
-        )
-
-        return [
-            item["path"]
-            for item in tree
-            if item["type"] == "blob"
-            and item["path"].endswith(".py")
-        ]
         
     def list_python_files(self):
         tree = self.project.repository_tree(
@@ -113,3 +102,49 @@ class GitLabService:
                 result.append(path)
 
         return result
+    
+    
+    def clone_repository(
+        self,
+        local_path: str,
+    ):
+        Path(local_path).parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        project = self.project
+
+        repo_url = (
+            project.http_url_to_repo
+            .replace(
+                "https://",
+                f"https://oauth2:{self.gl.private_token}@",
+            )
+        )
+
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                repo_url,
+                local_path,
+            ],
+            check=True,
+        )
+
+
+    def pull_repository(
+        self,
+        local_path: str,
+    ):
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                local_path,
+                "pull",
+            ],
+            check=True,
+        )
+

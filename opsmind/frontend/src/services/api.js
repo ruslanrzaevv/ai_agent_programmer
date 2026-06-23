@@ -105,6 +105,10 @@ export const incidentsAPI = {
       `/incidents/${id}/generate-code-fix`
     ),
   applyFix: (id, confirmed) => api.post(`/incidents/${id}/apply-fix`, { confirmed }),
+  orbit: (id) =>
+    api.get(
+      `/incidents/${id}/orbit`
+    ),
 };
 
 // ─── Logs ──────────────────────────────────────────────────────────────────────

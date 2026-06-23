@@ -196,6 +196,21 @@ class IncidentOut(BaseModel):
     acknowledged_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    
+    orbit_root_cause: str | None = None
+
+    orbit_risk_score: int = 0
+    orbit_blast_radius: int = 0
+
+    orbit_definitions: int = 0
+    orbit_imports: int = 0
+    orbit_calls: int = 0
+
+    orbit_affected_files: list[str] = []
+    orbit_affected_services: list[str] = []
+
+    orbit_dependency_graph: dict | None = None
+    orbit_error_line: int | None = None
 
 class IncidentAcknowledge(BaseModel):
     pass
@@ -284,3 +299,9 @@ class SetupWizardResponse(BaseModel):
 class AnalyzeSetupRequest(BaseModel):
     form_data: dict
     
+class OrbitAnalysisResponse(BaseModel):
+    root_cause: str | None
+    affected_files: list[str]
+    affected_services: list[str]
+    blast_radius: int
+    risk_score: int
